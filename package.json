@@ -1,0 +1,31 @@
+{
+  "name": "@anthropic/jira-cli-claude",
+  "version": "1.0.0",
+  "description": "Zero-dependency Jira CLI + Claude Code skill for AI-driven issue workflows",
+  "bin": {
+    "jira": "./bin/jira"
+  },
+  "files": [
+    "bin/",
+    ".claude/"
+  ],
+  "keywords": [
+    "jira",
+    "cli",
+    "claude",
+    "claude-code",
+    "ai",
+    "devtools",
+    "atlassian",
+    "issue-tracker"
+  ],
+  "author": "fanxinqi",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fanxinqi/jira-cli-claude"
+  },
+  "engines": {
+    "node": ">=14"
+  }
+}

@@ -1,0 +1,749 @@
+#!/usr/bin/env node
+
+/**
+ * Jira CLI - Zero-dependency Jira command line tool
+ * Works with Jira Server, Data Center, and Cloud
+ *
+ * Setup:    jira config
+ * Help:     jira help
+ */
+
+const https = require('https');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const readline = require('readline');
+
+// ── Config Management ────────────────────────────────────
+
+const CONFIG_DIR = path.join(require('os').homedir(), '.jira-cli');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+
+function loadConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function saveConfig(config) {
+  if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  fs.chmodSync(CONFIG_FILE, 0o600);
+}
+
+function requireConfig() {
+  const config = loadConfig();
+  if (!config) {
+    console.error('Jira not configured. Run: jira config');
+    process.exit(1);
+  }
+  return config;
+}
+
+// ── HTTP Request ─────────────────────────────────────────
+
+function request(config, method, apiPath, body) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(apiPath, config.host);
+    const isHttps = url.protocol === 'https:';
+    const mod = isHttps ? https : http;
+
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+
+    // Authentication
+    if (config.cookie) {
+      // Cookie auth (SSO login)
+      headers['Cookie'] = config.cookie;
+    } else if (config.username && config.password) {
+      // Jira Server: Basic auth with username:password
+      headers['Authorization'] =
+        'Basic ' + Buffer.from(`${config.username}:${config.password}`).toString('base64');
+    } else if (config.email && config.token) {
+      // Jira Cloud: Basic auth with email:api-token
+      headers['Authorization'] =
+        'Basic ' + Buffer.from(`${config.email}:${config.token}`).toString('base64');
+    } else if (config.token) {
+      // Jira Server/DC: Bearer token
+      headers['Authorization'] = `Bearer ${config.token}`;
+    }
+
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (isHttps ? 443 : 80),
+      path: url.pathname + url.search,
+      method,
+      headers,
+      rejectUnauthorized: config.insecure ? false : true,
+    };
+
+    const req = mod.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          let msg = `HTTP ${res.statusCode}`;
+          try {
+            const err = JSON.parse(data);
+            msg += ': ' + (err.errorMessages?.join(', ') || err.message || data);
+          } catch {
+            msg += ': ' + data.slice(0, 200);
+          }
+          reject(new Error(msg));
+        } else {
+          try {
+            resolve(data ? JSON.parse(data) : null);
+          } catch {
+            resolve(data);
+          }
+        }
+      });
+    });
+
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+function jiraApi(config, method, path, body) {
+  // Support Jira instances with path prefix (e.g. https://jira.company.com/jira)
+  const url = new URL(config.host);
+  const prefix = url.pathname.replace(/\/+$/, '');
+  return request(config, method, `${prefix}/rest/api/2${path}`, body);
+}
+
+// ── Terminal Utilities ───────────────────────────────────
+
+const C = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  cyan: '\x1b[36m',
+  white: '\x1b[37m',
+  gray: '\x1b[90m',
+};
+
+function c(color, text) {
+  return `${C[color]}${text}${C.reset}`;
+}
+
+function prompt(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+function truncate(str, len) {
+  if (!str) return '';
+  str = str.replace(/\n/g, ' ');
+  return str.length > len ? str.slice(0, len - 1) + '...' : str;
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return '-';
+  return dateStr.replace(/T.*/, '');
+}
+
+// Convert Jira wiki/ADF to plain text
+function simplifyDescription(desc) {
+  if (!desc) return '(no description)';
+  if (typeof desc === 'string') {
+    // Wiki markup - simple conversion
+    return desc
+      .replace(/\{code[^}]*\}/g, '```')
+      .replace(/\{noformat\}/g, '```')
+      .replace(/h[1-6]\.\s*/g, '## ')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/_([^_]+)_/g, '$1')
+      .replace(/\[([^|]+)\|([^\]]+)\]/g, '$1 ($2)')
+      .replace(/\[([^\]]+)\]/g, '$1');
+  }
+  // ADF (Atlassian Document Format) - recursive text extraction
+  if (typeof desc === 'object') {
+    return extractAdfText(desc);
+  }
+  return String(desc);
+}
+
+function extractAdfText(node) {
+  if (!node) return '';
+  if (typeof node === 'string') return node;
+  if (node.type === 'text') return node.text || '';
+  if (node.type === 'hardBreak') return '\n';
+  if (node.type === 'codeBlock') {
+    const code = (node.content || []).map(extractAdfText).join('');
+    return '\n```\n' + code + '\n```\n';
+  }
+  if (node.type === 'heading') {
+    const level = node.attrs?.level || 2;
+    const text = (node.content || []).map(extractAdfText).join('');
+    return '#'.repeat(level) + ' ' + text + '\n';
+  }
+  if (node.type === 'bulletList' || node.type === 'orderedList') {
+    return (node.content || [])
+      .map((item, i) => {
+        const prefix = node.type === 'orderedList' ? `${i + 1}. ` : '- ';
+        return prefix + (item.content || []).map(extractAdfText).join('');
+      })
+      .join('\n') + '\n';
+  }
+  if (node.content) {
+    return node.content.map(extractAdfText).join('') + (node.type === 'paragraph' ? '\n' : '');
+  }
+  return '';
+}
+
+// ── Status Color Mapping ─────────────────────────────────
+
+function statusColor(status) {
+  const s = (status || '').toLowerCase();
+  if (['done', 'closed', 'resolved'].some((k) => s.includes(k))) return 'green';
+  if (['progress', 'review'].some((k) => s.includes(k))) return 'blue';
+  if (['todo', 'open', 'backlog'].some((k) => s.includes(k))) return 'yellow';
+  return 'white';
+}
+
+function priorityIcon(priority) {
+  const p = (priority || '').toLowerCase();
+  if (p.includes('highest') || p.includes('blocker')) return c('red', '!!!');
+  if (p.includes('high') || p.includes('critical')) return c('red', '!! ');
+  if (p.includes('medium')) return c('yellow', '!  ');
+  if (p.includes('low')) return c('green', '.  ');
+  return c('gray', '   ');
+}
+
+// ── Commands ─────────────────────────────────────────────
+
+async function cmdConfig() {
+  const existing = loadConfig();
+  console.log(c('bold', '\nJira CLI Configuration\n'));
+
+  if (existing) {
+    console.log(`Current: ${existing.host} (${existing.username || existing.email || 'token auth'})`);
+    const update = await prompt('Reconfigure? (y/N) ');
+    if (update.toLowerCase() !== 'y') return;
+  }
+
+  const host = await prompt('Jira URL (e.g. https://jira.yourcompany.com): ');
+  if (!host) return console.error('URL cannot be empty');
+
+  console.log(c('dim', '\nAuthentication method:'));
+  console.log(c('dim', '  1. Browser Cookie (for SSO login)'));
+  console.log(c('dim', '  2. Username + Password (Jira Server)'));
+  console.log(c('dim', '  3. Email + API Token (Jira Cloud)'));
+  console.log(c('dim', '  4. Personal Access Token (Jira Server/DC)\n'));
+
+  const authType = await prompt('Choose auth method (1/2/3/4, default 1): ') || '1';
+
+  let config;
+  if (authType === '1') {
+    console.log(c('dim', '\nHow to get Cookie:'));
+    console.log(c('dim', '  1. Open Jira in browser and login'));
+    console.log(c('dim', '  2. Press F12 -> Network tab'));
+    console.log(c('dim', '  3. Refresh page, click any request'));
+    console.log(c('dim', '  4. Copy the full Cookie value from Request Headers\n'));
+    const cookie = await prompt('Cookie: ');
+    if (!cookie) return console.error('Cookie cannot be empty');
+    const insecure = (await prompt('Skip SSL verification? (y/N) ')).toLowerCase() === 'y';
+    config = { host: host.replace(/\/+$/, ''), cookie, insecure };
+  } else if (authType === '2') {
+    const username = await prompt('Username: ');
+    if (!username) return console.error('Username cannot be empty');
+    const password = await prompt('Password: ');
+    if (!password) return console.error('Password cannot be empty');
+    const insecure = (await prompt('Skip SSL verification? (y/N) ')).toLowerCase() === 'y';
+    config = { host: host.replace(/\/+$/, ''), username, password, insecure };
+  } else if (authType === '3') {
+    const email = await prompt('Email: ');
+    if (!email) return console.error('Email cannot be empty');
+    const token = await prompt('API Token: ');
+    if (!token) return console.error('Token cannot be empty');
+    const insecure = (await prompt('Skip SSL verification? (y/N) ')).toLowerCase() === 'y';
+    config = { host: host.replace(/\/+$/, ''), email, token, insecure };
+  } else {
+    const token = await prompt('Personal Access Token: ');
+    if (!token) return console.error('Token cannot be empty');
+    const insecure = (await prompt('Skip SSL verification? (y/N) ')).toLowerCase() === 'y';
+    config = { host: host.replace(/\/+$/, ''), token, insecure };
+  }
+
+  // Verify connection
+  process.stdout.write('\nVerifying connection... ');
+  try {
+    const me = await jiraApi(config, 'GET', '/myself');
+    console.log(c('green', `Success! Hello, ${me.displayName}`));
+    saveConfig(config);
+    console.log(c('dim', `Config saved to ${CONFIG_FILE}\n`));
+  } catch (err) {
+    console.log(c('red', `Failed: ${err.message}`));
+  }
+}
+
+async function cmdCookie() {
+  const config = loadConfig();
+  if (!config) {
+    console.error('Run jira config first');
+    process.exit(1);
+  }
+  console.log(c('bold', '\nUpdate Cookie\n'));
+  console.log(c('dim', 'Copy new Cookie value from browser DevTools:\n'));
+  const cookie = await prompt('Cookie: ');
+  if (!cookie) return console.error('Cookie cannot be empty');
+  config.cookie = cookie;
+
+  process.stdout.write('\nVerifying connection... ');
+  try {
+    const me = await jiraApi(config, 'GET', '/myself');
+    console.log(c('green', `Success! Hello, ${me.displayName}`));
+    saveConfig(config);
+    console.log(c('dim', 'Cookie updated\n'));
+  } catch (err) {
+    console.log(c('red', `Failed: ${err.message}`));
+  }
+}
+
+async function cmdAutoCookie() {
+  let config = loadConfig();
+
+  // First-time setup
+  if (!config) {
+    console.log(c('bold', '\nFirst-time setup - Auto Chrome Cookie\n'));
+    const host = await prompt('Jira URL (e.g. https://jira.yourcompany.com): ');
+    if (!host) return console.error('URL cannot be empty');
+    const insecure = (await prompt('Skip SSL verification? (y/N) ')).toLowerCase() === 'y';
+    config = { host: host.replace(/\/+$/, ''), insecure };
+  }
+
+  const domain = new URL(config.host).hostname;
+  console.log(c('dim', `\nReading cookies for ${domain} from Chrome...`));
+  console.log(c('dim', '(macOS may prompt for Keychain access — click "Allow")\n'));
+
+  try {
+    const { getCookiesForDomain } = require('./chrome-cookie');
+    const { cookies, cookieString } = getCookiesForDomain(domain);
+
+    if (cookies.length === 0) {
+      console.log(c('red', `No cookies found for ${domain}`));
+      console.log(c('dim', 'Make sure you are logged into Jira in Chrome'));
+      return;
+    }
+
+    console.log(c('dim', `Found ${cookies.length} cookies`));
+    config.cookie = cookieString;
+
+    // Verify
+    process.stdout.write('Verifying connection... ');
+    const me = await jiraApi(config, 'GET', '/myself');
+    console.log(c('green', `Success! Hello, ${me.displayName}`));
+    saveConfig(config);
+    console.log(c('dim', `Config saved to ${CONFIG_FILE}\n`));
+  } catch (err) {
+    console.log(c('red', `Failed: ${err.message}`));
+    console.log(c('dim', '\nChrome cookies can be read while Chrome is running.'));
+    console.log(c('dim', 'If this keeps failing, try: jira cookie (manual paste)'));
+  }
+}
+
+async function cmdView(issueKey) {
+  if (!issueKey) {
+    console.error('Usage: jira view <ISSUE-KEY>');
+    process.exit(1);
+  }
+  const config = requireConfig();
+  const issue = await jiraApi(
+    config,
+    'GET',
+    `/issue/${issueKey}?fields=summary,status,priority,assignee,reporter,created,updated,description,comment,issuetype,labels,components,fixVersions`,
+  );
+
+  const f = issue.fields;
+  console.log();
+  console.log(c('bold', `${issue.key}`) + c('dim', ` ${f.issuetype?.name || ''}`));
+  console.log(c('bold', f.summary));
+  console.log();
+  console.log(
+    `Status: ${c(statusColor(f.status?.name), f.status?.name || '-')}    ` +
+      `Priority: ${f.priority?.name || '-'}    ` +
+      `Type: ${f.issuetype?.name || '-'}`,
+  );
+  console.log(
+    `Assignee: ${f.assignee?.displayName || 'Unassigned'}    ` +
+      `Reporter: ${f.reporter?.displayName || '-'}`,
+  );
+  console.log(
+    `Created: ${formatDate(f.created)}    ` + `Updated: ${formatDate(f.updated)}`,
+  );
+  if (f.labels?.length) console.log(`Labels: ${f.labels.join(', ')}`);
+  if (f.components?.length)
+    console.log(`Components: ${f.components.map((c) => c.name).join(', ')}`);
+  if (f.fixVersions?.length)
+    console.log(`Fix Versions: ${f.fixVersions.map((v) => v.name).join(', ')}`);
+
+  console.log(c('dim', '\n─── Description ────────────────────────────────'));
+  console.log(simplifyDescription(f.description));
+
+  // Show recent comments
+  const comments = f.comment?.comments || [];
+  if (comments.length > 0) {
+    console.log(c('dim', '\n─── Recent Comments ────────────────────────────'));
+    const recent = comments.slice(-5);
+    for (const cm of recent) {
+      console.log(
+        `\n${c('cyan', cm.author?.displayName || '?')} ${c('dim', formatDate(cm.created))}`,
+      );
+      console.log(simplifyDescription(cm.body));
+    }
+  }
+
+  console.log(c('dim', `\nLink: ${config.host}/browse/${issue.key}\n`));
+}
+
+async function cmdList(jqlOrPreset) {
+  const config = requireConfig();
+  let jql;
+
+  // Preset queries
+  const presets = {
+    mine: 'assignee = currentUser() AND resolution = Unresolved ORDER BY priority DESC, updated DESC',
+    'my-bugs':
+      'assignee = currentUser() AND issuetype = Bug AND resolution = Unresolved ORDER BY priority DESC',
+    recent:
+      'assignee = currentUser() AND updated >= -7d ORDER BY updated DESC',
+    todo: 'assignee = currentUser() AND status in ("To Do", "Open", "Backlog") ORDER BY priority DESC',
+  };
+
+  if (!jqlOrPreset) {
+    jql = presets.mine;
+    console.log(c('dim', 'Default query: my unresolved issues\n'));
+  } else if (presets[jqlOrPreset]) {
+    jql = presets[jqlOrPreset];
+    console.log(c('dim', `Preset: ${jqlOrPreset}\n`));
+  } else {
+    jql = jqlOrPreset;
+  }
+
+  const result = await jiraApi(
+    config,
+    'GET',
+    `/search?jql=${encodeURIComponent(jql)}&maxResults=30&fields=summary,status,priority,assignee,updated,issuetype`,
+  );
+
+  if (result.total === 0) {
+    console.log(c('yellow', 'No matching issues found'));
+    return;
+  }
+
+  console.log(c('dim', `Total ${result.total}, showing ${result.issues.length}:\n`));
+
+  // Table output
+  const keyWidth = Math.max(...result.issues.map((i) => i.key.length), 5);
+  const cols = process.stdout.columns || 120;
+  const summaryWidth = cols - keyWidth - 30;
+
+  for (const issue of result.issues) {
+    const f = issue.fields;
+    const status = f.status?.name || '';
+    console.log(
+      `${priorityIcon(f.priority?.name)} ` +
+        `${c('cyan', issue.key.padEnd(keyWidth))} ` +
+        `${c(statusColor(status), status.padEnd(12).slice(0, 12))} ` +
+        `${truncate(f.summary, summaryWidth)}`,
+    );
+  }
+  console.log();
+}
+
+async function cmdSearch(keyword) {
+  if (!keyword) {
+    console.error('Usage: jira search <keyword>');
+    process.exit(1);
+  }
+  const jql = `text ~ "${keyword}" ORDER BY updated DESC`;
+  await cmdList(jql);
+}
+
+async function cmdComment(issueKey, ...messageParts) {
+  if (!issueKey) {
+    console.error('Usage: jira comment <ISSUE-KEY> [message]');
+    process.exit(1);
+  }
+  const config = requireConfig();
+  let message = messageParts.join(' ');
+  if (!message) {
+    message = await prompt('Comment: ');
+  }
+  if (!message) return;
+
+  await jiraApi(config, 'POST', `/issue/${issueKey}/comment`, { body: message });
+  console.log(c('green', `Comment added to ${issueKey}`));
+}
+
+async function cmdAssign(issueKey, ...nameParts) {
+  if (!issueKey) {
+    console.error('Usage: jira assign <ISSUE-KEY> <username/name>');
+    process.exit(1);
+  }
+  const config = requireConfig();
+  let nameQuery = nameParts.join(' ');
+  if (!nameQuery) {
+    nameQuery = await prompt('Assign to (username or name): ');
+  }
+  if (!nameQuery) return;
+
+  // Search users
+  const users = await jiraApi(config, 'GET', `/user/search?username=${encodeURIComponent(nameQuery)}&maxResults=10`);
+
+  if (!users || users.length === 0) {
+    console.error(c('red', `User not found: ${nameQuery}`));
+    return;
+  }
+
+  let targetUser;
+  if (users.length === 1) {
+    targetUser = users[0];
+  } else {
+    // Multiple matches
+    console.log(c('bold', `\nFound ${users.length} matching users:\n`));
+    users.forEach((u, i) => {
+      console.log(`  ${c('cyan', String(i + 1))}. ${u.displayName} ${c('dim', `(${u.name})`)} ${c('dim', u.emailAddress || '')}`);
+    });
+    const choice = await prompt('\nSelect (number): ');
+    const idx = parseInt(choice) - 1;
+    if (idx < 0 || idx >= users.length) {
+      console.error('Invalid selection');
+      return;
+    }
+    targetUser = users[idx];
+  }
+
+  // Assign
+  await request(config, 'PUT', `${new URL(config.host).pathname.replace(/\/+$/, '')}/rest/api/2/issue/${issueKey}/assignee`, { name: targetUser.name });
+  console.log(c('green', `${issueKey} assigned to ${targetUser.displayName} (${targetUser.name})`));
+}
+
+async function cmdTransition(issueKey, targetStatus) {
+  if (!issueKey) {
+    console.error('Usage: jira move <ISSUE-KEY> [target status]');
+    process.exit(1);
+  }
+  const config = requireConfig();
+
+  // Get available transitions
+  const { transitions } = await jiraApi(config, 'GET', `/issue/${issueKey}/transitions`);
+
+  if (!targetStatus) {
+    console.log(c('bold', `\n${issueKey} available transitions:\n`));
+    transitions.forEach((t, i) => {
+      console.log(`  ${c('cyan', String(i + 1))}. ${t.name} ${c('dim', `(${t.to.name})`)}`);
+    });
+    const choice = await prompt('\nSelect (number or name): ');
+    const idx = parseInt(choice) - 1;
+    if (idx >= 0 && idx < transitions.length) {
+      targetStatus = transitions[idx].name;
+    } else {
+      targetStatus = choice;
+    }
+  }
+
+  const transition = transitions.find(
+    (t) =>
+      t.name.toLowerCase() === targetStatus.toLowerCase() ||
+      t.to.name.toLowerCase() === targetStatus.toLowerCase(),
+  );
+
+  if (!transition) {
+    console.error(
+      c('red', `Status "${targetStatus}" not found. Available: ${transitions.map((t) => t.name).join(', ')}`),
+    );
+    process.exit(1);
+  }
+
+  await jiraApi(config, 'POST', `/issue/${issueKey}/transitions`, {
+    transition: { id: transition.id },
+  });
+  console.log(c('green', `${issueKey} -> ${transition.to.name}`));
+}
+
+async function cmdBranch(issueKey) {
+  if (!issueKey) {
+    console.error('Usage: jira branch <ISSUE-KEY>');
+    process.exit(1);
+  }
+  const config = requireConfig();
+  const issue = await jiraApi(config, 'GET', `/issue/${issueKey}?fields=summary,issuetype`);
+  const f = issue.fields;
+
+  // Generate branch name: fix/PROJ-123-summary-text
+  const type = (f.issuetype?.name || '').toLowerCase();
+  const prefix = type === 'bug' ? 'fix' : type === 'story' ? 'feat' : type === 'task' ? 'chore' : 'feat';
+  const slug = f.summary
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 40);
+  const branchName = `${prefix}/${issue.key}-${slug}`;
+
+  console.log(`\nSuggested branch: ${c('cyan', branchName)}`);
+  const confirm = await prompt('Create and switch to this branch? (Y/n) ');
+  if (confirm.toLowerCase() === 'n') return;
+
+  const { execSync } = require('child_process');
+  try {
+    execSync(`git checkout -b "${branchName}"`, { stdio: 'inherit' });
+    console.log(c('green', `\nBranch created: ${branchName}`));
+  } catch {
+    console.error(c('red', 'Failed to create branch'));
+  }
+}
+
+async function cmdFixlog(issueKey, ...msgParts) {
+  if (!issueKey) {
+    console.error('Usage: jira fixlog <ISSUE-KEY> [description]');
+    process.exit(1);
+  }
+  const config = requireConfig();
+  let message = msgParts.join(' ');
+  if (!message) {
+    message = await prompt('Fix description: ');
+  }
+  if (!message) return;
+
+  const comment = `[Fix Log]\n${message}\n\n_-- via jira-cli_`;
+  await jiraApi(config, 'POST', `/issue/${issueKey}/comment`, { body: comment });
+  console.log(c('green', `Fix log added to ${issueKey}`));
+
+  // Ask about status transition
+  const move = await prompt('Move to In Progress / Done? (enter target status or press Enter to skip) ');
+  if (move) {
+    await cmdTransition(issueKey, move);
+  }
+}
+
+// ── Help ─────────────────────────────────────────────────
+
+function cmdHelp() {
+  console.log(`
+${c('bold', 'Jira CLI')} - Zero-dependency Jira command line tool
+
+${c('bold', 'Setup:')}
+  jira config                    Configure Jira connection
+  jira auto-cookie               Auto-read Cookie from Chrome (macOS)
+  jira cookie                    Manually paste Cookie
+
+${c('bold', 'View:')}
+  jira view   <ISSUE-KEY>        View issue details
+  jira open   <ISSUE-KEY>        Open issue in browser
+
+${c('bold', 'Search:')}
+  jira list                      List my unresolved issues
+  jira list   mine               Same as above
+  jira list   my-bugs            My unresolved bugs
+  jira list   recent             Updated in last 7 days
+  jira list   todo               My to-do items
+  jira list   "<JQL>"            Custom JQL query
+  jira search <keyword>          Search by keyword
+
+${c('bold', 'Actions:')}
+  jira assign  <KEY> <name>      Assign issue to someone
+  jira comment <KEY> [message]   Add comment
+  jira move    <KEY> [status]    Transition issue status
+  jira branch  <KEY>             Create git branch from issue
+  jira fixlog  <KEY> [desc]      Log fix and optionally update status
+
+${c('bold', 'Preset JQL shortcuts:')}
+  mine      My unresolved issues
+  my-bugs   My unresolved bugs
+  recent    Updated in last 7 days
+  todo      To-do / Open / Backlog
+
+${c('bold', 'Examples:')}
+  jira config
+  jira list
+  jira list my-bugs
+  jira view PROJ-123
+  jira search "login failed"
+  jira branch PROJ-123
+  jira comment PROJ-123 "Fixed, pending verification"
+  jira move PROJ-123 Done
+  jira fixlog PROJ-123 "Fixed null pointer exception"
+`);
+}
+
+// ── Main Entry ───────────────────────────────────────────
+
+async function main() {
+  const [, , cmd, ...args] = process.argv;
+
+  try {
+    switch (cmd) {
+      case 'config':
+        return await cmdConfig();
+      case 'cookie':
+        return await cmdCookie();
+      case 'auto-cookie':
+      case 'ac':
+        return await cmdAutoCookie();
+      case 'view':
+      case 'show':
+        return await cmdView(args[0]);
+      case 'list':
+      case 'ls':
+        return await cmdList(args.join(' ') || undefined);
+      case 'search':
+      case 'find':
+        return await cmdSearch(args.join(' '));
+      case 'assign':
+        return await cmdAssign(args[0], ...args.slice(1));
+      case 'comment':
+        return await cmdComment(args[0], ...args.slice(1));
+      case 'move':
+      case 'transition':
+        return await cmdTransition(args[0], args.slice(1).join(' ') || undefined);
+      case 'branch':
+        return await cmdBranch(args[0]);
+      case 'fixlog':
+        return await cmdFixlog(args[0], ...args.slice(1));
+      case 'open': {
+        const config = requireConfig();
+        if (!args[0]) {
+          console.error('Usage: jira open <ISSUE-KEY>');
+          process.exit(1);
+        }
+        const { execSync } = require('child_process');
+        const openCmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+        execSync(`${openCmd} "${config.host}/browse/${args[0]}"`, { stdio: 'inherit' });
+        return;
+      }
+      case 'help':
+      case '--help':
+      case '-h':
+      case undefined:
+        return cmdHelp();
+      default:
+        // If looks like PROJ-123, treat as view
+        if (/^[A-Z]+-\d+$/i.test(cmd)) {
+          return await cmdView(cmd);
+        }
+        console.error(`Unknown command: ${cmd}\nRun jira help for usage`);
+        process.exit(1);
+    }
+  } catch (err) {
+    console.error(c('red', `Error: ${err.message}`));
+    process.exit(1);
+  }
+}
+
+main();
