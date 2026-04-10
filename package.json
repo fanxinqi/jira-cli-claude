@@ -1,5 +1,5 @@
 {
-  "name": "@anthropic/jira-cli-claude",
+  "name": "jira-cli-claude",
   "version": "1.0.0",
   "description": "Zero-dependency Jira CLI + Claude Code skill for AI-driven issue workflows",
   "bin": {
