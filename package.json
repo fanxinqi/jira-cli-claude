@@ -1,5 +1,5 @@
 {
-  "name": "jira-cli-claude",
+  "name": "jira-cli",
   "version": "1.0.0",
   "description": "Zero-dependency Jira CLI + Claude Code skill for AI-driven issue workflows",
   "bin": {
@@ -23,7 +23,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/fanxinqi/jira-cli-claude"
+    "url": "https://github.com/fanxinqi/jira-cli"
   },
   "engines": {
     "node": ">=14"

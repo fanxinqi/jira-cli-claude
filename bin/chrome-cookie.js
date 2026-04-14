@@ -127,7 +127,7 @@ function getCookiesForDomain(domain) {
     }
 
     const cookies = [];
-    const seen = new Map();
+    const seen = new Map(); // name -> { value, domain }
     const lines = output.split('\n');
 
     for (const line of lines) {
@@ -144,8 +144,21 @@ function getCookiesForDomain(domain) {
 
       if (!value || /[\x00-\x08\x0e-\x1f\x80-\xff]/.test(value)) continue;
 
-      if (seen.has(name) && seen.get(name).length >= value.length) continue;
-      seen.set(name, value);
+      // Prefer exact domain match over wildcard (e.g. "jira.co" > ".jira.co")
+      if (seen.has(name)) {
+        const prev = seen.get(name);
+        const prevIsWild = prev.domain.startsWith('.');
+        const curIsWild = hostKey.startsWith('.');
+        if (prevIsWild === curIsWild) {
+          // Same specificity — keep longer value
+          if (prev.value.length >= value.length) continue;
+        } else if (!prevIsWild) {
+          // Previous is exact match, skip wildcard
+          continue;
+        }
+        // else: previous is wildcard, current is exact — replace
+      }
+      seen.set(name, { value, domain: hostKey });
 
       const existIdx = cookies.findIndex((c) => c.name === name);
       if (existIdx >= 0) cookies.splice(existIdx, 1);

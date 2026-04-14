@@ -1,152 +1,249 @@
-# jira-cli-claude
+# jira-cli
 
-Zero-dependency Jira CLI + Claude Code skill for AI-driven issue workflows.
+零依赖 Jira 命令行工具，内置 Claude Code Skill，让 AI 直接操作 Jira。
 
-A lightweight command-line tool for Jira that works standalone **and** as a [Claude Code](https://claude.ai/code) skill — letting Claude automatically read issues, create branches, fix code, and update Jira status.
+Zero-dependency Jira CLI with built-in Claude Code Skill for AI-driven issue workflows.
 
-## Features
+## 功能特性
 
-- **Zero dependencies** — pure Node.js, no npm install needed
-- **4 auth methods** — Cookie (SSO), username/password, email/API token, Personal Access Token
-- **Auto Cookie** — reads Chrome cookies automatically on macOS (no manual copy-paste)
-- **Claude Code skill** — includes a ready-to-use skill that drives the full fix workflow
-- **Works everywhere** — Jira Server, Data Center, and Cloud
+- **零依赖** -- 纯 Node.js 实现，无需安装任何第三方包
+- **多平台支持** -- 兼容 Jira Server、Data Center、Cloud
+- **四种认证方式** -- Cookie（SSO）、用户名密码、邮箱 + API Token、Personal Access Token
+- **macOS 自动读取 Chrome Cookie** -- 支持飞书 SSO、Okta、Azure AD 等企业登录，一条命令完成认证
+- **内置 Claude Code Skill** -- 安装即获得 `jira-workflow` 技能，AI 自动读取问题、创建分支、修复代码、更新状态
+- **中英文双语（i18n）** -- 根据系统 locale 或手动配置自动切换语言
 
-## Quick Start
+## AI Coding 工具安装教程
 
-### Install globally
+本工具可配合 Claude Code、Cursor、Windsurf 等 AI coding 工具使用。安装后，AI 可以直接通过命令行操作 Jira。
+
+### 方式一：npm 全局安装（推荐）
 
 ```bash
-npm install -g jira-cli-claude
+npm install -g jira-cli
 ```
 
-### Or use in a project
+公司内部 npm 源：
 
 ```bash
-npm install --save-dev jira-cli-claude
+npm install -g jira-cli --registry=https://nexus.int.taou.com/repository/npm-hosted/
 ```
 
-### Or just clone and link
+### 方式二：作为项目开发依赖
 
 ```bash
-git clone https://github.com/fanxinqi/jira-cli-claude.git
-cd jira-cli-claude
+npm install --save-dev jira-cli
+```
+
+### 方式三：手动 clone + npm link
+
+```bash
+git clone https://github.com/fanxinqi/jira-cli.git
+cd jira-cli
 npm link
 ```
 
-### Configure
+### 验证安装
+
+安装完成后，运行以下命令确认 CLI 可用：
 
 ```bash
-# Interactive setup (recommended for first time)
+jira help
+```
+
+输出类似如下内容即表示安装成功：
+
+```
+Jira CLI
+零依赖 Jira 命令行工具
+
+配置:
+  jira config                    配置 Jira 连接
+  jira auto-cookie               从 Chrome 自动读取 Cookie (macOS)
+  jira cookie                    手动粘贴 Cookie
+...
+```
+
+## 配置
+
+首次使用需要配置 Jira 连接信息。
+
+### 交互式配置（推荐首次使用）
+
+```bash
 jira config
+```
 
-# Or auto-read Cookie from Chrome (macOS, one command)
+按提示输入 Jira 地址并选择认证方式。
+
+### 认证方式一览
+
+| 方式 | 适用场景 | 命令 |
+|------|----------|------|
+| Auto Cookie (`jira ac`) | SSO 登录（飞书、Okta、Azure AD 等） | 在 Chrome 中登录 Jira，然后运行 `jira ac` |
+| 手动 Cookie | SSO 登录但自动读取失败时 | `jira config` 选择方式 1，或 `jira cookie` 更新 |
+| 用户名 + 密码 | Jira Server | `jira config` 选择方式 2 |
+| 邮箱 + API Token | Jira Cloud | `jira config` 选择方式 3 |
+| Personal Access Token | Jira Server/DC 8.14+ | `jira config` 选择方式 4 |
+
+### Auto Cookie（macOS）
+
+`jira ac` 命令可以直接从 Chrome 的加密数据库中读取 Cookie，免去手动复制的麻烦：
+
+```bash
+# 1. 在 Chrome 中登录 Jira（通过飞书 SSO 或其他方式）
+# 2. 运行以下命令
 jira ac
+# 3. macOS 可能弹出钥匙串访问提示，点击"允许"
+# 4. 完成，Cookie 已保存并验证
 ```
 
-## CLI Usage
+Chrome 运行时即可读取，无需关闭浏览器。
 
-```
-Setup:
-  jira config                    Configure Jira connection
-  jira auto-cookie / jira ac     Auto-read Cookie from Chrome (macOS)
-  jira cookie                    Manually paste Cookie
+### 语言设置
 
-View:
-  jira view   <ISSUE-KEY>        View issue details
-  jira open   <ISSUE-KEY>        Open issue in browser
-
-Search:
-  jira list                      List my unresolved issues
-  jira list   mine               Same as above
-  jira list   my-bugs            My unresolved bugs
-  jira list   recent             Updated in last 7 days
-  jira list   todo               My to-do items
-  jira list   "<JQL>"            Custom JQL query
-  jira search <keyword>          Search by keyword
-
-Actions:
-  jira assign  <KEY> <name>      Assign issue to someone
-  jira comment <KEY> [message]   Add comment
-  jira move    <KEY> [status]    Transition issue status
-  jira branch  <KEY>             Create git branch from issue
-  jira fixlog  <KEY> [desc]      Log fix and optionally update status
-```
-
-### Examples
+CLI 支持中文和英文，默认根据系统 locale 自动检测。也可以在 `jira config` 时手动选择：
 
 ```bash
-jira list                          # My unresolved issues
-jira list my-bugs                  # My bugs
-jira view PROJ-123                 # View issue details
-jira PROJ-123                      # Shorthand for view
-jira search "login failed"         # Full-text search
-jira branch PROJ-123               # Create fix/PROJ-123-summary branch
-jira comment PROJ-123 "Fixed it"   # Add comment
-jira move PROJ-123 Done            # Transition to Done
-jira fixlog PROJ-123 "Fixed NPE"   # Log fix + optional status change
+jira config
+# 最后一步会提示：语言 / Language (en/zh, 默认自动检测)
 ```
 
-## Claude Code Skill
+配置文件存储在 `~/.jira-cli/config.json`，权限为 600。
 
-This package includes a Claude Code skill at `.claude/skills/jira-workflow/SKILL.md` that automates the entire issue-fixing workflow:
+## 命令参考
 
-1. **Auth** — auto-authenticates via `jira ac`
-2. **Read** — fetches issue details from Jira
-3. **Analyze** — determines if the issue belongs to your codebase
-4. **Fix** — creates branch, fixes code, commits with issue key
-5. **Update** — adds comment and transitions Jira status
+### 配置
 
-### Setup for Claude Code
+| 命令 | 说明 |
+|------|------|
+| `jira config` | 交互式配置 Jira 连接 |
+| `jira auto-cookie` / `jira ac` | 从 Chrome 自动读取 Cookie（macOS） |
+| `jira cookie` | 手动粘贴更新 Cookie |
 
-After installing, tell Claude Code about the skill:
+### 查看
+
+| 命令 | 说明 |
+|------|------|
+| `jira view <ISSUE-KEY>` | 查看问题详情 |
+| `jira <ISSUE-KEY>` | 同上（简写） |
+| `jira open <ISSUE-KEY>` | 在浏览器中打开问题 |
+
+### 搜索
+
+| 命令 | 说明 |
+|------|------|
+| `jira list` | 列出我的未解决问题 |
+| `jira list mine` | 同上 |
+| `jira list my-bugs` | 我的未解决 Bug |
+| `jira list recent` | 最近 7 天更新的问题 |
+| `jira list todo` | 我的待办事项 |
+| `jira list "<JQL>"` | 自定义 JQL 查询 |
+| `jira search <keyword>` | 按关键词全文搜索 |
+
+### 操作
+
+| 命令 | 说明 |
+|------|------|
+| `jira assign <KEY> <name>` | 分配问题给某人 |
+| `jira comment <KEY> [message]` | 添加评论 |
+| `jira move <KEY> [status]` | 转换问题状态 |
+| `jira branch <KEY>` | 从问题创建 Git 分支 |
+| `jira fixlog <KEY> [desc]` | 记录修复并可选更新状态 |
+
+### 用法示例
 
 ```bash
-# In your project directory
-claude
-
-# Then just say:
-> Handle PROJ-123
-> Check my Jira backlog
-> Search for auth-related bugs
+jira list                          # 列出我的未解决问题
+jira list my-bugs                  # 列出我的 Bug
+jira view PROJ-123                 # 查看问题详情
+jira PROJ-123                      # 简写方式查看
+jira search "login failed"         # 全文搜索
+jira branch PROJ-123               # 创建 fix/PROJ-123-summary 分支
+jira comment PROJ-123 "Fixed it"   # 添加评论
+jira move PROJ-123 Done            # 转换状态为 Done
+jira fixlog PROJ-123 "Fixed NPE"  # 记录修复，可选更新状态
+jira assign PROJ-123 zhangsan      # 分配给某人
 ```
 
-Or copy the skill file to your project:
+## Claude Code Skill 集成
+
+安装本工具后，Claude Code 会自动识别 `.claude/skills/` 下的技能文件。本工具包含两个 Skill：
+
+| Skill | 说明 |
+|-------|------|
+| `jira-setup` | 安装和配置技能 -- AI 自动完成安装、复制 Skill 文件、认证配置 |
+| `jira-workflow` | 工作流技能 -- AI 自动读取问题、创建分支、修复代码、更新 Jira 状态 |
+
+### 让 AI 自动安装（推荐）
+
+最简单的方式：安装后直接告诉 AI：
+
+```
+帮我安装配置一下 Jira CLI
+```
+
+或英文：
+
+```
+Set up Jira integration for this project
+```
+
+AI 会自动执行 `jira-setup` Skill：安装 CLI、复制 Skill 文件到项目、完成认证。
+
+### 手动复制 Skill 到项目
+
+如果你是通过 npm 安装的，也可以手动将 skill 文件复制到项目目录：
 
 ```bash
-mkdir -p .claude/skills/jira-workflow
-cp node_modules/jira-cli-claude/.claude/skills/jira-workflow/SKILL.md .claude/skills/jira-workflow/
+# 复制两个 skill
+mkdir -p .claude/skills/jira-workflow .claude/skills/jira-setup
+cp node_modules/jira-cli/.claude/skills/jira-workflow/SKILL.md .claude/skills/jira-workflow/
+cp node_modules/jira-cli/.claude/skills/jira-setup/SKILL.md .claude/skills/jira-setup/
 ```
 
-## Authentication Methods
+### jira-workflow 工作流
 
-| Method | Best For | Setup |
-|--------|----------|-------|
-| Auto Cookie (`jira ac`) | SSO login (Okta, Azure AD, etc.) | Login in Chrome, run `jira ac` |
-| Manual Cookie | SSO when auto fails | Copy from DevTools |
-| Username + Password | Jira Server | `jira config` → option 2 |
-| Email + API Token | Jira Cloud | `jira config` → option 3 |
-| Personal Access Token | Jira Server/DC 8.14+ | `jira config` → option 4 |
+`jira-workflow` 技能自动化完整的问题修复流程：
 
-Config is stored at `~/.jira-cli/config.json` (permissions: 600).
+1. **认证** -- 通过 `jira ac` 自动认证，失败时引导重新登录
+2. **读取** -- 从 Jira 获取问题详情（标题、描述、状态、评论等）
+3. **分析** -- 判断问题是否属于当前代码库
+4. **修复** -- 创建分支、定位问题、修复代码、提交（commit message 包含问题编号）
+5. **更新** -- 添加评论并转换 Jira 状态
 
-## Auto Cookie (macOS)
+### 自然语言触发
 
-The `jira ac` command reads cookies directly from Chrome's encrypted database:
+在 Claude Code 中直接用自然语言触发：
 
-1. Login to Jira in Chrome (via SSO, password, whatever)
-2. Run `jira ac`
-3. macOS may prompt for Keychain access — click "Allow"
-4. Done! Cookie is saved and verified.
+**中文：**
 
-Works while Chrome is running. No need to close it.
+```
+看看我的 Jira
+查一下 PROJ-123
+修一下 PROJ-123
+帮我处理一下这个 Jira
+搜一下登录相关的 bug
+把 PROJ-123 分配给张三
+给这个工单加个评论
+查一下我的待办
+```
 
-## Requirements
+**English:**
+
+```
+Handle PROJ-123
+Check my Jira backlog
+Search for auth-related bugs
+Fix this issue PROJ-456
+This issue isn't a frontend problem, reassign it
+```
+
+## 系统要求
 
 - Node.js >= 14
-- macOS for auto-cookie feature (other auth methods work on any OS)
+- macOS（Auto Cookie 功能需要，其他认证方式不限操作系统）
 
 ## License
 
 MIT
-# jira-cli-claude
