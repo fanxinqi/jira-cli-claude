@@ -149,3 +149,4 @@ Works while Chrome is running. No need to close it.
 ## License
 
 MIT
+# jira-cli-claude
