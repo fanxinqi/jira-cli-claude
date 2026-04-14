@@ -121,6 +121,11 @@ const messages = {
     'fixlog.move_prompt': 'Move to In Progress / Done? (enter target status or press Enter to skip) ',
     // open
     'open.usage': 'Usage: jira open <ISSUE-KEY>',
+    // init
+    'init.copying': 'Copying Skill files to .claude/skills/ ...',
+    'init.done': 'Done! Claude Code will auto-detect jira skills.',
+    'init.already': 'Skill files already exist in .claude/skills/',
+    'init.failed': 'Failed to copy Skill files: {0}',
     // general
     'error.unknown_cmd': 'Unknown command: {0}\nRun jira help for usage',
     'no_description': '(no description)',
@@ -128,6 +133,7 @@ const messages = {
     'help.title': 'Jira CLI',
     'help.subtitle': 'Zero-dependency Jira command line tool',
     'help.setup': 'Setup:',
+    'help.init': '  jira init                      Copy AI skill files to current project',
     'help.config': '  jira config                    Configure Jira connection',
     'help.ac': '  jira auto-cookie               Auto-read Cookie from Chrome (macOS)',
     'help.cookie': '  jira cookie                    Manually paste Cookie',
@@ -259,6 +265,11 @@ const messages = {
     'fixlog.move_prompt': '移动到 进行中 / 完成？(输入目标状态或按 Enter 跳过) ',
     // open
     'open.usage': '用法: jira open <问题编号>',
+    // init
+    'init.copying': '正在复制 Skill 文件到 .claude/skills/ ...',
+    'init.done': '完成！Claude Code 会自动识别 Jira 技能。',
+    'init.already': 'Skill 文件已存在于 .claude/skills/',
+    'init.failed': '复制 Skill 文件失败: {0}',
     // general
     'error.unknown_cmd': '未知命令: {0}\n运行 jira help 查看用法',
     'no_description': '(无描述)',
@@ -266,6 +277,7 @@ const messages = {
     'help.title': 'Jira CLI',
     'help.subtitle': '零依赖 Jira 命令行工具',
     'help.setup': '配置:',
+    'help.init': '  jira init                      复制 AI 技能文件到当前项目',
     'help.config': '  jira config                    配置 Jira 连接',
     'help.ac': '  jira auto-cookie               从 Chrome 自动读取 Cookie (macOS)',
     'help.cookie': '  jira cookie                    手动粘贴 Cookie',
@@ -948,6 +960,36 @@ async function cmdFixlog(issueKey, ...msgParts) {
   }
 }
 
+// ── Init (copy skill files) ─────────────────────────────
+
+function cmdInit() {
+  const skills = ['jira-workflow', 'jira-setup'];
+  const srcBase = path.join(__dirname, '..', '.claude', 'skills');
+  const destBase = path.join(process.cwd(), '.claude', 'skills');
+
+  // Check if already exists
+  const allExist = skills.every(s => fs.existsSync(path.join(destBase, s, 'SKILL.md')));
+  if (allExist) {
+    console.log(c('yellow', t('init.already')));
+    return;
+  }
+
+  console.log(t('init.copying'));
+  try {
+    for (const skill of skills) {
+      const src = path.join(srcBase, skill, 'SKILL.md');
+      const dest = path.join(destBase, skill, 'SKILL.md');
+      if (!fs.existsSync(src)) continue;
+      fs.mkdirSync(path.join(destBase, skill), { recursive: true });
+      fs.copyFileSync(src, dest);
+    }
+    console.log(c('green', t('init.done')));
+  } catch (err) {
+    console.error(c('red', t('init.failed', err.message)));
+    process.exit(1);
+  }
+}
+
 // ── Help ─────────────────────────────────────────────────
 
 function cmdHelp() {
@@ -955,6 +997,7 @@ function cmdHelp() {
 ${c('bold', t('help.title'))} - ${t('help.subtitle')}
 
 ${c('bold', t('help.setup'))}
+${t('help.init')}
 ${t('help.config')}
 ${t('help.ac')}
 ${t('help.cookie')}
@@ -1005,6 +1048,8 @@ async function main() {
 
   try {
     switch (cmd) {
+      case 'init':
+        return cmdInit();
       case 'config':
         return await cmdConfig();
       case 'cookie':
