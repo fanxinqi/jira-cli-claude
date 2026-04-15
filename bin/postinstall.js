@@ -18,7 +18,7 @@ const isProject = fs.existsSync(path.join(projectRoot, '.git'))
   || fs.existsSync(path.join(projectRoot, 'package.json'));
 if (!isProject) process.exit(0);
 
-const skills = ['jira-workflow', 'jira-setup'];
+const skills = ['jira-workflow'];
 const srcBase = path.join(packageRoot, '.claude', 'skills');
 const destBase = path.join(projectRoot, '.claude', 'skills');
 

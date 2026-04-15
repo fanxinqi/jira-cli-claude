@@ -25,11 +25,12 @@ const messages = {
     'config.url_prompt': 'Jira URL (e.g. https://jira.yourcompany.com): ',
     'config.url_empty': 'URL cannot be empty',
     'config.auth_method': 'Authentication method:',
-    'config.auth_cookie': '  1. Browser Cookie (for SSO login)',
+    'config.auth_cookie': '  1. Browser Cookie (auto-read from Chrome, for SSO)',
     'config.auth_basic': '  2. Username + Password (Jira Server)',
     'config.auth_cloud': '  3. Email + API Token (Jira Cloud)',
     'config.auth_pat': '  4. Personal Access Token (Jira Server/DC)',
     'config.auth_choose': 'Choose auth method (1/2/3/4, default 1): ',
+    'config.auto_failed_fallback': 'Chrome cookie read failed ({0}), falling back to manual paste',
     'config.cookie_howto': 'How to get Cookie:',
     'config.cookie_step1': '  1. Open Jira in browser and login',
     'config.cookie_step2': '  2. Press F12 -> Network tab',
@@ -169,11 +170,12 @@ const messages = {
     'config.url_prompt': 'Jira 地址 (例如 https://jira.yourcompany.com): ',
     'config.url_empty': 'URL 不能为空',
     'config.auth_method': '认证方式:',
-    'config.auth_cookie': '  1. 浏览器 Cookie (用于 SSO 登录)',
+    'config.auth_cookie': '  1. 浏览器 Cookie (从 Chrome 自动读取,适用于 SSO)',
     'config.auth_basic': '  2. 用户名 + 密码 (Jira Server)',
     'config.auth_cloud': '  3. 邮箱 + API Token (Jira Cloud)',
     'config.auth_pat': '  4. 个人访问令牌 (Jira Server/DC)',
     'config.auth_choose': '选择认证方式 (1/2/3/4, 默认 1): ',
+    'config.auto_failed_fallback': 'Chrome Cookie 读取失败 ({0}),改为手动粘贴',
     'config.cookie_howto': '获取 Cookie 方法:',
     'config.cookie_step1': '  1. 在浏览器中打开并登录 Jira',
     'config.cookie_step2': '  2. 按 F12 -> 切换到 Network (网络) 标签',
@@ -571,15 +573,40 @@ async function cmdConfig() {
 
   let config;
   if (authType === '1') {
-    console.log(c('dim', '\n' + t('config.cookie_howto')));
-    console.log(c('dim', t('config.cookie_step1')));
-    console.log(c('dim', t('config.cookie_step2')));
-    console.log(c('dim', t('config.cookie_step3')));
-    console.log(c('dim', t('config.cookie_step4') + '\n'));
-    const cookie = await prompt(t('config.cookie_prompt'));
-    if (!cookie) return console.error(t('config.cookie_empty'));
     const insecure = (await prompt(t('config.skip_ssl'))).toLowerCase() === 'y';
-    config = { host: host.replace(/\/+$/, ''), cookie, insecure };
+    config = { host: host.replace(/\/+$/, ''), insecure };
+
+    // Try auto-read Chrome cookie first; fall back to manual paste if it fails.
+    const domain = new URL(config.host).hostname;
+    console.log(c('dim', '\n' + t('ac.reading', domain)));
+    console.log(c('dim', t('ac.keychain_hint') + '\n'));
+
+    let autoOk = false;
+    try {
+      const { getCookiesForDomain } = require('./chrome-cookie');
+      const { cookies, cookieString } = getCookiesForDomain(domain);
+      if (cookies.length > 0) {
+        console.log(c('dim', t('ac.found_cookies', cookies.length)));
+        config.cookie = cookieString;
+        autoOk = true;
+      } else {
+        console.log(c('yellow', t('ac.no_cookies', domain)));
+        console.log(c('dim', t('ac.ensure_login')));
+      }
+    } catch (err) {
+      console.log(c('yellow', t('config.auto_failed_fallback', err.message)));
+    }
+
+    if (!autoOk) {
+      console.log(c('dim', '\n' + t('config.cookie_howto')));
+      console.log(c('dim', t('config.cookie_step1')));
+      console.log(c('dim', t('config.cookie_step2')));
+      console.log(c('dim', t('config.cookie_step3')));
+      console.log(c('dim', t('config.cookie_step4') + '\n'));
+      const cookie = await prompt(t('config.cookie_prompt'));
+      if (!cookie) return console.error(t('config.cookie_empty'));
+      config.cookie = cookie;
+    }
   } else if (authType === '2') {
     const username = await prompt(t('config.username_prompt'));
     if (!username) return console.error(t('config.username_empty'));
@@ -963,7 +990,7 @@ async function cmdFixlog(issueKey, ...msgParts) {
 // ── Init (copy skill files) ─────────────────────────────
 
 function cmdInit() {
-  const skills = ['jira-workflow', 'jira-setup'];
+  const skills = ['jira-workflow'];
   const srcBase = path.join(__dirname, '..', '.claude', 'skills');
   const destBase = path.join(process.cwd(), '.claude', 'skills');
 

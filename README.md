@@ -168,38 +168,21 @@ jira assign PROJ-123 zhangsan      # 分配给某人
 
 ## Claude Code Skill 集成
 
-安装本工具后，Claude Code 会自动识别 `.claude/skills/` 下的技能文件。本工具包含两个 Skill：
+安装本工具后，Claude Code 会自动识别 `.claude/skills/` 下的技能文件。本工具内置 `jira-workflow` Skill：AI 自动读取问题、创建分支、修复代码、更新 Jira 状态。
 
-| Skill | 说明 |
-|-------|------|
-| `jira-setup` | 安装和配置技能 -- AI 自动完成安装、复制 Skill 文件、认证配置 |
-| `jira-workflow` | 工作流技能 -- AI 自动读取问题、创建分支、修复代码、更新 Jira 状态 |
+### Skill 安装方式
 
-### 让 AI 自动安装（推荐）
-
-最简单的方式：安装后直接告诉 AI：
-
-```
-帮我安装配置一下 Jira CLI
-```
-
-或英文：
-
-```
-Set up Jira integration for this project
-```
-
-AI 会自动执行 `jira-setup` Skill：安装 CLI、复制 Skill 文件到项目、完成认证。
-
-### 手动复制 Skill 到项目
-
-如果你是通过 npm 安装的，也可以手动将 skill 文件复制到项目目录：
+通过 npm 安装时，postinstall 脚本会自动把 `jira-workflow/SKILL.md` 复制到当前项目的 `.claude/skills/`。如果你是手动 clone 或 npm link，可运行：
 
 ```bash
-# 复制两个 skill
-mkdir -p .claude/skills/jira-workflow .claude/skills/jira-setup
+jira init
+```
+
+该命令会把内置 Skill 文件复制到当前项目。也可以手动拷贝：
+
+```bash
+mkdir -p .claude/skills/jira-workflow
 cp node_modules/jira-cli/.claude/skills/jira-workflow/SKILL.md .claude/skills/jira-workflow/
-cp node_modules/jira-cli/.claude/skills/jira-setup/SKILL.md .claude/skills/jira-setup/
 ```
 
 ### jira-workflow 工作流

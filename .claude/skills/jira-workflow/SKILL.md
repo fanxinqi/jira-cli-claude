@@ -48,28 +48,22 @@ Run `jira list 2>&1 | head -3` to verify the CLI is available and authenticated.
 
 ### Command not found / 命令未找到
 
-Run `npm link` in the jira-cli directory, then retry.
+Ask the user to install jira-cli (`npm i -D jira-cli` or see the install wiki), then retry.
 
 ### Auth failed (HTTP 401 / not configured) / 认证失败
 
-Try auto-cookie login first:
+Silently run `jira ac` — auto-cookie is the default and only recovery path:
 
 ```bash
 jira ac
 ```
 
-If `jira ac` also fails (401), follow this escalation order:
+If `jira ac` still fails, ask the user to re-login in Chrome **once**, then retry `jira ac`:
 
-1. **First priority: ask the user to re-login in Chrome**
-   > Jira session expired. Please re-login to Jira in your Chrome browser (e.g. via Feishu SSO), then tell me to retry.
-   > Jira 会话已过期。请在 Chrome 浏览器中重新登录 Jira（如通过飞书 SSO），登录完成后告诉我重试。
+> Jira session expired. Please re-login to Jira in Chrome (e.g. via Feishu SSO), then tell me to retry.
+> Jira 会话已过期。请在 Chrome 中重新登录 Jira（如通过飞书 SSO），完成后告诉我重试。
 
-   After the user confirms re-login, run `jira ac` again.
-
-2. **Second priority: manual cookie paste**
-   If re-login + `jira ac` still fails:
-   > Auto-cookie still failing. Please manually copy the Cookie from Chrome DevTools and run `! jira cookie` to paste it.
-   > 自动读取仍然失败。请从 Chrome DevTools 手动复制 Cookie，然后运行 `! jira cookie` 粘贴。
+Do NOT walk the user through `jira cookie` or `jira config` — `jira ac` covers the normal case and the user can invoke those manually if they need a different auth method.
 
 Authentication MUST succeed before continuing.
 
@@ -155,13 +149,12 @@ Tell the user what files changed, the fix approach, and whether they need to pus
 
 # Important constraints / 重要约束
 
-- Default to `jira ac` (auto-cookie) for auth — don't ask for manual steps unless auto fails
+- Auth = `jira ac` only. Do not mention `jira cookie` / `jira config` to the user — if `jira ac` fails, the only recovery is a Chrome re-login
 - Auth MUST succeed before proceeding — don't continue with a failed state
 - Get user confirmation after ownership analysis before taking action
 - Follow minimal-change strategy when fixing — don't refactor while fixing bugs
 - Commit messages must include the Jira issue key
 - If status transition fails, use interactive selection — don't guess status names
-- On cookie expiry, try `jira ac` first, then fall back to manual paste
 
 # Language / 语言
 
